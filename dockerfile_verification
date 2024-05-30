@@ -16,7 +16,17 @@ WORKDIR /xui/common
 
 COPY ..
 
+# Install dependencies
 RUN npm install
+
+# Build Storybook
+RUN npm run build-storybook
+
+# Install http-server to serve the static files
+RUN npm install -g http-server
 
 
 CMD ["tail", "-f", "/dev/null"]
+
+# Expose the port
+EXPOSE 6006
