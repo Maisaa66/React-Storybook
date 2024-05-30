@@ -18,7 +18,7 @@ COPY .storybook .storybook
 COPY public public
 COPY scripts scripts
 COPY src src
-COPY eslintrc.cjs eslintrc.cjs
+COPY .eslintrc.cjs .eslintrc.cjs
 COPY .gitignore .gitignore
 COPY LICENSE LICENSE
 COPY README.md README.md
