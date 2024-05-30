@@ -14,7 +14,20 @@ SHELL [ "/bin/bash", "-c" ]
 
 WORKDIR /xui/common
 
-COPY ..
+COPY .storybook .storybook
+COPY public public
+COPY scripts scripts
+COPY src src
+COPY eslintrc.cjs eslintrc.cjs
+COPY .gitignore .gitignore
+COPY LICENSE LICENSE
+COPY README.md README.md
+COPY index.html index.html
+COPY package-lock.json package-lock.json
+COPY package.json package.json
+COPY vite.config.js vite.config.js
+COPY yarn.lock yarn.lock
+
 
 # Install dependencies
 RUN npm install
