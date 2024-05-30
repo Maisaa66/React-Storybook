@@ -1,0 +1,173 @@
+#!groovy
+
+DOCKER_IMAGE_NAME='xui_common_gv_image'
+DOCKER_CONTAINER_NAME='xui_common_gv'
+JUNIT_TEST_REPORT_FILE_NAME='junit_common_testreport.xml'
+
+unitTestExecutionResultCode = -1
+checkTypesExecutionResultCode = -1 
+packageSecurityAuditResultCode = -1
+packageSecurityAuditNotAllowedBits = 248 
+linterResultCode = -1
+publishResultCode=-1
+packCode=-1
+
+node {
+    // if (env.BRANCH_NAME == 'master') {
+    //     echo 'I only execute on the master branch'
+    // } else {
+    //     echo 'I execute elsewhere'
+    // }
+    stage('clean up') {
+        containerExistsResultCode = bat (
+            script: "docker container inspect ${DOCKER_CONTAINER_NAME}",
+            returnStatus: true
+        )
+        
+        // 'docker container inspect' returns 0 if a container was found
+        if (containerExistsResultCode == 0) {
+            catchError {
+                bat "docker stop ${DOCKER_CONTAINER_NAME}"
+                bat "docker rm ${DOCKER_CONTAINER_NAME}"
+            }
+        }
+    }
+
+
+    stage("Clone") {
+        checkout([$class: 'GitSCM',
+            branches: [[name: "main"]],
+            doGenerateSubmoduleConfigurations: false,
+            extensions: [ [
+                    $class: 'SubmoduleOption',
+                    disableSubmodules: false,
+                    parentCredentials: true,
+                    recursiveSubmodules: true,
+                    reference: '',
+                    trackingSubmodules: false
+                ],
+                [
+                    $class: 'GitLFSPull'
+                ]
+            ],
+            submoduleCfg: [],
+            userRemoteConfigs: [
+                [
+                    url: "https://github.com/Maisaa66/Monorepo.git"
+                ]
+            ]
+        ])
+    }
+
+    stage("Prepare Docker Image") {
+        imageExistsResultCode = bat (
+            script: "docker image inspect ${DOCKER_IMAGE_NAME}",
+            returnStatus: true
+        )
+        
+        echo "Docker image inspect resultcode: ${imageExistsResultCode}"
+        echo "Rebuild flag state: ${env.REBUILD_NODE_DOCKER_IMAGE}"
+
+        // 'docker image inspect' returns 0 if an image was found
+        if (imageExistsResultCode != 0 || "true" == env.REBUILD_NODE_DOCKER_IMAGE) {
+            bat "docker build --tag ${DOCKER_IMAGE_NAME} --file ./dockerfile_verfication ."
+        }
+    }
+
+
+      def contID
+stage("Run Tests") {
+    try {
+        // this command will create a file with the container id
+        bat "docker create --cidfile ./xuicommon_gv_docker.pid --name ${DOCKER_CONTAINER_NAME} ${DOCKER_IMAGE_NAME}"
+
+        // Read the content of the PID file
+        contID = readFile('./xuicommon_gv_docker.pid').trim()
+
+        if (contID) {
+            // this command will start the container with the id from the file
+            bat "docker start ${contID}"
+            bat "npm config set proxy null"
+            bat "npm config set https-proxy null"
+            // package-a
+            // this command will execute the command in the container and return the result code 
+            // checkTypesExecutionResultCode = bat (
+            //     script: "docker exec ${contID} /bin/bash -c \"cd /xui/common && npm run check-types -w package-a\"",
+            //     returnStatus: true
+            // )
+
+            packageSecurityAuditResultCode = bat (
+                script: "docker exec ${contID} /bin/bash -c \"cd /xui/common && npm audit --groups dependencies -w @package-a/b\"",
+                returnStatus: true
+            )
+
+            linterResultCode = bat (
+                script: "docker exec ${contID} /bin/bash -c \"cd /xui/common && npm run build -w @package-a/b\"",
+                returnStatus: true
+            )
+            
+            
+            packCode = bat (
+                script: "docker exec ${contID} /bin/bash -c \"cd /xui/common && npm pack -w @package-a/b\"",
+                returnStatus: true
+            )
+            
+               withCredentials([string(credentialsId: 'verdaccio-token', variable: 'TOKEN')]) {
+
+            unitTestExecutionResultCode = bat(
+
+                            script: "docker exec ${contID} /bin/bash -c \"cd /xui/common && npm config set //127.0.0.1:4873/:_authToken=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyZWFsX2dyb3VwcyI6WyJ0cnkxIl0sIm5hbWUiOiJ0cnkxIiwiZ3JvdXBzIjpbInRyeTEiLCIkYWxsIiwiJGF1dGhlbnRpY2F0ZWQiLCJAYWxsIiwiQGF1dGhlbnRpY2F0ZWQiLCJhbGwiXSwiaWF0IjoxNzE1ODkxNjA0LCJuYmYiOjE3MTU4OTE2MDQsImV4cCI6MjAzMTI1MTYwNH0.PdVI-RAqswSX0WXIuCU_36aCRTWcF2-gbPS-z1I0p2I\"",
+
+                            returnStatus: true
+
+                        )
+
+}
+
+                publishResultCode = bat(
+                    script: "docker exec ${contID} /bin/bash -c \"cd /xui/common && npm publish -w @package-a/b \"",
+                    returnStatus: true
+                )
+        } else {
+            echo "Error: Container ID is empty."
+        }
+    }
+    // this command will stop and remove the container
+    finally {
+        if (contID) {
+            bat "docker stop ${contID}"
+            bat "docker rm ${contID}"
+        } else {
+            echo "Error: Container ID is empty."
+        }
+        bat "del .\\xuicommon_gv_docker.pid"
+    }
+}
+
+
+  stage('Finalize') {
+
+    if (0 != (packageSecurityAuditResultCode & packageSecurityAuditNotAllowedBits)) {
+        echo "Npm audit security check failed. Please check package vulnerabilities by running yarn audit or the log above."
+        currentBuild.result = 'FAILURE'
+    }
+        if (0 != unitTestExecutionResultCode) {
+            echo "Unit test execution result code: ${unitTestExecutionResultCode}. Failing build."
+            currentBuild.result = 'FAILURE'
+        }
+    if (0 != linterResultCode) {
+        echo "Linter indicated errors. Please check errors by running 'npm run lint' in development environment or check Jenkins logs."
+        currentBuild.result = 'UNSTABLE'
+    }
+    if (0 != publishResultCode) {
+        echo "Publish indicated errors. Please check errors by running 'npm run lint' in development environment or check Jenkins logs."
+        currentBuild.result = 'UNSTABLE'
+    }
+    if (0 != packCode) {
+        echo "pack indicated errors. Please check errors by running 'npm run lint' in development environment or check Jenkins logs."
+        currentBuild.result = 'UNSTABLE'
+    }
+    
+}  
+}
+
